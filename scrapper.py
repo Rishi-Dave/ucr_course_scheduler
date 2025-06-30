@@ -77,19 +77,52 @@ def fetch_prerequisites(sess: requests.Session,
                         term: str,
                         crn: str,
                         course_re: re.Pattern,
-                        desc2code: Dict[str, str]) -> str:
+                        desc2code: Dict[str, str],
+                        course_code: str) -> str:
+
     url = (
         "https://registrationssb.ucr.edu/StudentRegistrationSsb/ssb/"
-        f"searchResults/getSectionPrerequisites?term={term}&courseReferenceNumber={crn}"
+        f"searchResults/getSectionPrerequisites?term={term}"
+        f"&courseReferenceNumber={crn}"
     )
+
     try:
         html = sess.get(url, timeout=15).text
         if "No prerequisite information available" in html:
             return ""
-        text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
-        return clean_prereq_html(text, course_re, desc2code)
+
+        text      = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+        raw       = course_re.findall(text)              # all matching pieces
+        cleaned: List[str] = []
+
+        for token in raw:
+            token = token.upper().strip()
+            match = re.match(r"([A-Z& ]+?)(\d{1,4}[A-Z]?)$", token)
+            if not match:
+                continue
+
+            subj_raw, num = match.groups()
+            subj_raw  = subj_raw.strip()
+
+            # Map full subject description → 4-letter code
+            subj_code = (
+                subj_raw if len(subj_raw) <= 4 and " " not in subj_raw
+                else desc2code.get(subj_raw.replace(" ", ""), subj_raw[:4])
+            )
+
+            candidate = f"{subj_code}{num}"
+
+            # ⛔ skip self-referential prerequisite
+            if candidate == course_code:
+                continue
+
+            cleaned.append(candidate)
+
+        unique = list(dict.fromkeys(cleaned))            # de-dupe, keep order
+        return " OR ".join(unique)
+
     except Exception as e:
-        print(f"⚠️  prereq fetch fail CRN {crn}: {e}")
+        print(f"⚠️  prereq fetch error CRN {crn}: {e}")
         return ""
 
 
@@ -110,8 +143,11 @@ def main():
     course_re, desc2code = build_regex_and_map(sections)
 
     for s in sections:
-        crn = s["courseReferenceNumber"]
-        s["prerequisites"] = fetch_prerequisites(sess, TERM, crn, course_re, desc2code)
+        crn         = s["courseReferenceNumber"]
+        course_code = f"{s['subject'].strip().upper()}{s['courseNumber']}"
+        s["prerequisites"] = fetch_prerequisites(
+            sess, TERM, crn, course_re, desc2code, course_code
+        )
 
     write_csv(sections, CSV_FILENAME)
 
