@@ -38,20 +38,17 @@ def banner_sections(sess: requests.Session, term: str) -> List[Dict[str, Any]]:
 
 # -------- PREREQUISITE HELPERS --------
 def build_regex_and_map(sections: List[Dict[str, Any]]):
+
     desc2code, tokens = {}, set()
+
     for s in sections:
-        code = s["subject"].strip().upper()                 # e.g. "ANTH"
-        desc = s["subjectDescription"].strip()             # e.g. "Anthropology"
+        code = s["subject"].strip().upper()                 # e.g. CS
+        desc = s["subjectDescription"].strip()              # e.g. Computer Science
         tokens.add(code)
         if desc:
             tokens.add(desc)
-            desc2code[desc.upper()] = code
-
-    token_regex = "|".join(
-        sorted([re.sub(r"\s+", r"\\s*", re.escape(t)) for t in tokens], key=len, reverse=True)
-    )
-    course_re = re.compile(rf"((?:{token_regex})\s*\d{{1,4}}[A-Za-z]?)", flags=re.I)
-    return course_re, desc2code
+            clean_desc = re.sub(r"\s+", "", desc.upper())   # 'COMPUTERSCIENCE'
+            desc2code[clean_desc] = code
 
 
 def clean_prereq_html(text: str, course_re: re.Pattern, desc2code: Dict[str, str]) -> str:
