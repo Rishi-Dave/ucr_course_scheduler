@@ -13,10 +13,7 @@ def extract_prerequisites(prereq_string: str):
 # Load the CSV written by scrapper.py
 df = pd.read_csv("ucr_courses_202440.csv")
 
-# Add the parsed list column
-df["parsed_prerequisites"] = df["prerequisites"].apply(extract_prerequisites)
+prereq_filtered_df = df[df['prerequisites'].fillna('').str.strip() != '']
+classes_with_prereqs_count = len(prereq_filtered_df)
 
-# Write out a new CSV (optional)
-df.to_csv("ucr_courses_with_parsed_prereqs.csv", index=False, encoding="utf-8")
-print("✅ parsed_prerequisites column added and file saved")
-# ──────────────────────────────────────────
+print(classes_with_prereqs_count)
