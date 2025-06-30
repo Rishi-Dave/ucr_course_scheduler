@@ -38,17 +38,24 @@ def banner_sections(sess: requests.Session, term: str) -> List[Dict[str, Any]]:
 
 # -------- PREREQUISITE HELPERS --------
 def build_regex_and_map(sections: List[Dict[str, Any]]):
+
     desc2code, tokens = {}, set()
+
     for s in sections:
-        code = s["subject"].strip().upper()                 # e.g. "ANTH"
-        desc = s["subjectDescription"].strip()             # e.g. "Anthropology"
+        code = s["subject"].strip().upper()                 # e.g. CS
+        desc = s["subjectDescription"].strip()              # e.g. Computer Science
         tokens.add(code)
         if desc:
             tokens.add(desc)
-            desc2code[desc.upper()] = code
+            clean_desc = re.sub(r"\s+", "", desc.upper())   # 'COMPUTERSCIENCE'
+            desc2code[clean_desc] = code
 
+    # Build one giant regex that tolerates whitespace between words
     token_regex = "|".join(
-        sorted([re.sub(r"\s+", r"\\s*", re.escape(t)) for t in tokens], key=len, reverse=True)
+        sorted(
+            [re.sub(r"\s+", r"\\s*", re.escape(t)) for t in tokens],
+            key=len, reverse=True,
+        )
     )
     course_re = re.compile(rf"((?:{token_regex})\s*\d{{1,4}}[A-Za-z]?)", flags=re.I)
     return course_re, desc2code
@@ -73,13 +80,18 @@ def clean_prereq_html(text: str, course_re: re.Pattern, desc2code: Dict[str, str
     return " OR ".join(unique)
 
 
-def fetch_prerequisites(sess: requests.Session,
-                        term: str,
-                        crn: str,
-                        course_re: re.Pattern,
-                        desc2code: Dict[str, str],
-                        course_code: str) -> str:
-
+def fetch_prerequisites(
+    sess: requests.Session,
+    term: str,
+    crn: str,
+    course_re: re.Pattern,            # ← still needed for quick matches
+    desc2code: Dict[str, str],        # ← full-name → 4-letter code
+    course_code: str                  # ← e.g. "CS141" (self code)
+) -> str:
+    """
+    Extract prerequisite codes, map long subjects to 4-letter codes,
+    drop duplicates, and skip self-reference.
+    """
     url = (
         "https://registrationssb.ucr.edu/StudentRegistrationSsb/ssb/"
         f"searchResults/getSectionPrerequisites?term={term}"
@@ -91,40 +103,34 @@ def fetch_prerequisites(sess: requests.Session,
         if "No prerequisite information available" in html:
             return ""
 
-        text      = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
-        raw       = course_re.findall(text)              # all matching pieces
-        cleaned: List[str] = []
+        text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True).upper()
 
-        for token in raw:
-            token = token.upper().strip()
-            match = re.match(r"([A-Z& ]+?)(\d{1,4}[A-Z]?)$", token)
-            if not match:
+        # -------- 1. find 4-letter subject codes directly ----------
+        codes_direct = re.findall(r"\b([A-Z]{2,4})\s*(\d{1,4}[A-Z]?)\b", text)
+        direct = [f"{code}{num}" for code, num in codes_direct]
+
+        # -------- 2. find long names (Computer Science 010C) --------
+        long_matches = re.findall(r"([A-Z][A-Z ]{4,})\s*(\d{1,4}[A-Z]?)", text)
+        long_clean: List[str] = []
+        for long_subj_raw, num in long_matches:
+            key = re.sub(r"\s+", "", long_subj_raw)  # strip spaces
+            subj_code = desc2code.get(key, None)
+            if subj_code:
+                long_clean.append(f"{subj_code}{num}")
+
+        # -------- 3. combine, de-dup, skip self --------------------
+        all_codes = []
+        for c in direct + long_clean:
+            if c == course_code:        # skip self prerequisite
                 continue
+            if c not in all_codes:
+                all_codes.append(c)
 
-            subj_raw, num = match.groups()
-            subj_raw  = subj_raw.strip()
-
-            # Map full subject description → 4-letter code
-            subj_code = (
-                subj_raw if len(subj_raw) <= 4 and " " not in subj_raw
-                else desc2code.get(subj_raw.replace(" ", ""), subj_raw[:4])
-            )
-
-            candidate = f"{subj_code}{num}"
-
-            # ⛔ skip self-referential prerequisite
-            if candidate == course_code:
-                continue
-
-            cleaned.append(candidate)
-
-        unique = list(dict.fromkeys(cleaned))            # de-dupe, keep order
-        return " OR ".join(unique)
+        return " OR ".join(all_codes)
 
     except Exception as e:
-        print(f"⚠️  prereq fetch error CRN {crn}: {e}")
+        print(f"⚠️ prereq fetch error CRN {crn}: {e}")
         return ""
-
 
 # -------- CSV --------
 def write_csv(rows: List[Dict[str, Any]], filename: str):
