@@ -73,23 +73,56 @@ def clean_prereq_html(text: str, course_re: re.Pattern, desc2code: Dict[str, str
     return " OR ".join(unique)
 
 
-def fetch_prerequisites(sess: requests.Session,
-                        term: str,
-                        crn: str,
-                        course_re: re.Pattern,
-                        desc2code: Dict[str, str]) -> str:
+def fetch_prerequisites(
+    sess: requests.Session,
+    term: str,
+    crn: str,
+    course_re: re.Pattern,            # ← still needed for quick matches
+    desc2code: Dict[str, str],        # ← full-name → 4-letter code
+    course_code: str                  # ← e.g. "CS141" (self code)
+) -> str:
+    """
+    Extract prerequisite codes, map long subjects to 4-letter codes,
+    drop duplicates, and skip self-reference.
+    """
     url = (
         "https://registrationssb.ucr.edu/StudentRegistrationSsb/ssb/"
-        f"searchResults/getSectionPrerequisites?term={term}&courseReferenceNumber={crn}"
+        f"searchResults/getSectionPrerequisites?term={term}"
+        f"&courseReferenceNumber={crn}"
     )
+
     try:
         html = sess.get(url, timeout=15).text
         if "No prerequisite information available" in html:
             return ""
-        text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
-        return clean_prereq_html(text, course_re, desc2code)
+
+        text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True).upper()
+
+        # -------- 1. find 4-letter subject codes directly ----------
+        codes_direct = re.findall(r"\b([A-Z]{2,4})\s*(\d{1,4}[A-Z]?)\b", text)
+        direct = [f"{code}{num}" for code, num in codes_direct]
+
+        # -------- 2. find long names (Computer Science 010C) --------
+        long_matches = re.findall(r"([A-Z][A-Z ]{4,})\s*(\d{1,4}[A-Z]?)", text)
+        long_clean: List[str] = []
+        for long_subj_raw, num in long_matches:
+            key = re.sub(r"\s+", "", long_subj_raw)  # strip spaces
+            subj_code = desc2code.get(key, None)
+            if subj_code:
+                long_clean.append(f"{subj_code}{num}")
+
+        # -------- 3. combine, de-dup, skip self --------------------
+        all_codes = []
+        for c in direct + long_clean:
+            if c == course_code:        # skip self prerequisite
+                continue
+            if c not in all_codes:
+                all_codes.append(c)
+
+        return " OR ".join(all_codes)
+
     except Exception as e:
-        print(f"⚠️  prereq fetch fail CRN {crn}: {e}")
+        print(f"⚠️ prereq fetch error CRN {crn}: {e}")
         return ""
 
 
