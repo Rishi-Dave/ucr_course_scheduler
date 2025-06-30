@@ -50,6 +50,16 @@ def build_regex_and_map(sections: List[Dict[str, Any]]):
             clean_desc = re.sub(r"\s+", "", desc.upper())   # 'COMPUTERSCIENCE'
             desc2code[clean_desc] = code
 
+    # Build one giant regex that tolerates whitespace between words
+    token_regex = "|".join(
+        sorted(
+            [re.sub(r"\s+", r"\\s*", re.escape(t)) for t in tokens],
+            key=len, reverse=True,
+        )
+    )
+    course_re = re.compile(rf"((?:{token_regex})\s*\d{{1,4}}[A-Za-z]?)", flags=re.I)
+    return course_re, desc2code
+
 
 def clean_prereq_html(text: str, course_re: re.Pattern, desc2code: Dict[str, str]) -> str:
     raw = course_re.findall(text)
@@ -122,7 +132,6 @@ def fetch_prerequisites(
         print(f"⚠️ prereq fetch error CRN {crn}: {e}")
         return ""
 
-
 # -------- CSV --------
 def write_csv(rows: List[Dict[str, Any]], filename: str):
     fieldnames = sorted({k for r in rows for k in r})
@@ -140,8 +149,11 @@ def main():
     course_re, desc2code = build_regex_and_map(sections)
 
     for s in sections:
-        crn = s["courseReferenceNumber"]
-        s["prerequisites"] = fetch_prerequisites(sess, TERM, crn, course_re, desc2code)
+        crn         = s["courseReferenceNumber"]
+        course_code = f"{s['subject'].strip().upper()}{s['courseNumber']}"
+        s["prerequisites"] = fetch_prerequisites(
+            sess, TERM, crn, course_re, desc2code, course_code
+        )
 
     write_csv(sections, CSV_FILENAME)
 
