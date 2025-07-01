@@ -2,6 +2,25 @@ import pandas as pd
 import json
 import ast # Used for safely evaluating strings containing Python literal structures
 
+def process_prerequisites(prereq_string: str):
+        prereq_string = str(prereq_string)
+        if prereq_string == "none":
+            return []
+
+        # Step 1: Split by " AND " first. Each part resulting from this split
+        # represents a group of prerequisites that must ALL be met.
+        and_parts = [part.strip() for part in prereq_string.split(" AND ")]
+        parsed_prereqs = []
+
+        for and_part in and_parts:
+            # Step 2: Within each "AND" part, split by " OR ".
+            # These are the individual courses that can satisfy this specific "AND" condition.
+            or_group = [course.strip() for course in and_part.split(" OR ")]
+            parsed_prereqs.append(or_group) # Each inner list now represents an "OR" group
+        return parsed_prereqs
+
+
+
 def generate_course_json(csv_file_path):
     """
     Loads course data from a CSV, extracts specified fields,
@@ -57,11 +76,6 @@ def generate_course_json(csv_file_path):
             return str(val) if not pd.isna(val) else None
     
 
-    def process_prerequisites(prereq_str):
-        if pd.isna(prereq_str) or prereq_str == '':
-            return [] # Return an empty list for missing prerequisites
-        # Split by ' OR ' and strip any leading/trailing whitespace from each element
-        return [p.strip() for p in str(prereq_str).split(' OR ')]
 
     # Apply safe_literal_eval to 'faculty' and 'meetingsFaculty'
     for col in ['faculty', 'meetingsFaculty']:
@@ -130,4 +144,7 @@ generated_json = generate_course_json("ucr_courses_202440.csv")
 
 with open('ucr_courses_data.json', 'w') as f:
         f.write(generated_json)
+print("\nJSON data saved to ucr_courses_data.json")
+
+print(process_prerequisites("CS010A AND CS011 OR MATH011 AND MATH009C OR MATH09H AND MATH031 OR EE020B"))
 print("\nJSON data saved to ucr_courses_data.json")
