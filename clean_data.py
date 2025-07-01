@@ -20,6 +20,7 @@ def process_prerequisites(prereq_string: str):
         return parsed_prereqs
 
 
+
 def generate_course_json(csv_file_path):
     """
     Loads course data from a CSV, extracts specified fields,
@@ -75,7 +76,6 @@ def generate_course_json(csv_file_path):
             return str(val) if not pd.isna(val) else None
     
 
-    
 
     # Apply safe_literal_eval to 'faculty' and 'meetingsFaculty'
     for col in ['faculty', 'meetingsFaculty']:
@@ -147,3 +147,4 @@ with open('ucr_courses_data.json', 'w') as f:
 print("\nJSON data saved to ucr_courses_data.json")
 
 print(process_prerequisites("CS010A AND CS011 OR MATH011 AND MATH009C OR MATH09H AND MATH031 OR EE020B"))
+print("\nJSON data saved to ucr_courses_data.json")
