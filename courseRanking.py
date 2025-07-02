@@ -98,19 +98,9 @@ def prereqs_fullfilled(client, coursesTaken, coursesToTake):
                 validCourses.append(course)
     return validCourses 
 
-if __name__ == "__main__":
-    coursesTaken = ["CS010A", "CS010B", "CS010C", "CS011", "MATH031", "MATH009C", "CS061", "CS100", "PHYS040A", "CS120A", "STAT010", "CS111"]
-    coursesToTake = ["CS141", "CS150", "CS120B", "CS161", "STAT155", "ME009", "CS170", "CS171", "CS173", "PHYS040B", "PHYS040C"]
-    # remove from list if prereqs aren't met
-    mongo_client = connect_to_mongodb(MONGO_URI)
 
-    if mongo_client:
-        validCourses = prereqs_fullfilled(mongo_client, coursesTaken, coursesToTake)
-        print(validCourses)
-
-
-    general_interest_query = "courses that help me learn english" # Or derived from user's broader intent
-    if general_interest_query:
+def score_embeddings(mongo_client, query, validCourses):
+    if query:
         query_embedding = client.embeddings.create(
             input=[general_interest_query],
             model="text-embedding-3-small"
@@ -128,7 +118,10 @@ if __name__ == "__main__":
                 'path': 'embedding', 
                 'queryVector': query_embedding,
                 'numCandidates': 10000,
-                'limit': 10
+                'limit': 50,
+                "filter": {                               
+                    "course_id": { "$in": validCourses }
+                    }
                 }
             }, {
                 '$project': {
@@ -144,9 +137,79 @@ if __name__ == "__main__":
         ]
         
         result = mongo_client[DATABASE_NAME][EMBEDDINGS_COLLECTION_NAME].aggregate(pipeline)
+        vector_similarity_scores = []
+        added_courses = set()
         for i in result:
-            print(i)
+            if(i["course_id"] in added_courses):
+                continue
+            vector_similarity_scores.append(i)
+            added_courses.add(i["course_id"])
 
+        return vector_similarity_scores
+
+def get_user_preferences(query):
+    prompt = f"""
+            Given this query from the user: {query},
+
+    """
+def get_llm_score(course, query, semantic_similarity_score):
+    """
+    Constructs a prompt and calls OpenAI to get a score for a candidate schedule/section,
+    incorporating semantic relevance.
+    """
+    
+    # Calculate semantic similarity for the candidate if a general_query_embedding is provided
+    
+    # Craft the prompt to the LLM
+    prompt = f"""
+    You are an academic advisor. A student wants to find courses that fit their preferences.
+    Student's Preferences: {query}
+    
+    Here is a specific course section being considered:
+    Course: {course['subjectCourse']} - {course['courseTitle']}
+    Days: Monday - {course['meeting_meetingMonday']}, Tuesday  - {course['meeting_meetingTuesday']}, Wednesday - {course['meeting_meetingWednesday']}, Thursday - {course['meeting_meetingThursday']}, Friday - {course['meeting_meetingFriday']}
+    /Times(In Military Time, Morning is 800 - 1100, Afternoon is 1200 - 1500, Evening is 1600- 1900): {course['meeting_meetingBeginTime']} - {course['meeting_meetingEndTime']}
+    [Other details]
+    
+    This course has a semantic similarity score of {semantic_similarity_score} to the student's broader interests (where 1.0 is a perfect match).
+    
+    On a scale of 1 to 10... considering all preferences including semantic fit, output just the score
+    Score:
+    """
+
+    try:
+        messages = [{"role": "user", "content": prompt}]  
+        response = client.chat.completions.create(model=deployment, messages=messages, max_tokens=600, temperature = 0.1)
+        return response.choices[0].message.content
+    except:
+        print(f"Error calling Azure OpenAI:")
+        return ""
+
+
+
+if __name__ == "__main__":
+    coursesTaken = ["CS010A", "CS010B", "CS010C", "CS011", "MATH031", "MATH009C", "CS061", "CS100", "PHYS040A", "CS120A", "STAT010", "CS111"]
+    coursesToTake = ["CS141", "CS150", "CS120B", "CS161", "STAT155", "ME009", "CS170", "CS171", "CS173", "PHYS040B", "PHYS040C"]
+    # remove from list if prereqs aren't met
+    mongo_client = connect_to_mongodb(MONGO_URI)
+
+    if mongo_client:
+        
+
+
+        validCourses = prereqs_fullfilled(mongo_client, coursesTaken, coursesToTake)
+
+
+        general_interest_query = "CS141 and CS150" # Or derived from user's broader intent
+        vector_similarity_score = score_embeddings(mongo_client, general_interest_query, validCourses)
+        
+        for i in vector_similarity_score:
+            courses = list(mongo_client[DATABASE_NAME][COURSES_COLLECTION_NAME].find({"subjectCourse" : i["course_id"]}))
+            for course in courses:
+                print(f"{i["course_id"]}: {course["meeting_meetingBeginTime"]} - {course["meeting_meetingEndTime"]}")
+                print(get_llm_score(course, general_interest_query, i["score"]))
+
+        
         mongo_client.close()
         print("MongoDB connection closed.")
     else:
