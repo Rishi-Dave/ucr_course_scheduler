@@ -172,9 +172,9 @@ def get_llm_score(course, query, semantic_similarity_score):
     [Other details]
     
     This course has a semantic similarity score of {semantic_similarity_score} to the student's broader interests (where 1.0 is a perfect match).
+    Go against the semantic search ONLY if the query contradicts it
     
-    On a scale of 1 to 10... considering all preferences including semantic fit, output just the score
-    Score:
+    On a scale of 1 to 10... considering all preferences including semantic fit, output just the score as a single integer
     """
 
     try:
@@ -200,16 +200,23 @@ if __name__ == "__main__":
         validCourses = prereqs_fullfilled(mongo_client, coursesTaken, coursesToTake)
 
 
-        general_interest_query = "CS141 and CS150" # Or derived from user's broader intent
+        general_interest_query = "I want to take non-cs classes and am most free on Wednesday, Tuesday, Thursday mornings and afternoons" # Or derived from user's broader intent
         vector_similarity_score = score_embeddings(mongo_client, general_interest_query, validCourses)
-        
+        ranked_courses = []
         for i in vector_similarity_score:
-            courses = list(mongo_client[DATABASE_NAME][COURSES_COLLECTION_NAME].find({"subjectCourse" : i["course_id"]}))
+            courses = list(mongo_client[DATABASE_NAME][COURSES_COLLECTION_NAME].find({"subjectCourse" : i["course_id"], "meeting_meetingTypeDescription" : "Lecture"}))
             for course in courses:
-                print(f"{i["course_id"]}: {course["meeting_meetingBeginTime"]} - {course["meeting_meetingEndTime"]}")
-                print(get_llm_score(course, general_interest_query, i["score"]))
+                score = int(get_llm_score(course, general_interest_query, i["score"]))
+                ranked_courses.append({"score" : score, "courseData": course})
 
-        
+        maxCourse = {}
+        maxScore = 0
+        for course in ranked_courses:
+            if course["score"] > maxScore:
+                maxScore = course["score"]
+                maxCourse = course
+
+        print(maxCourse)
         mongo_client.close()
         print("MongoDB connection closed.")
     else:
