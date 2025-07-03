@@ -1,75 +1,102 @@
 """
-chatbot.py
-──────────
-Simple console chatbot that:
-1.  Asks the student for completed courses & preferences.
-2.  Calls partner's courseRanking.rank_courses() to get wish scores.
-3.  Feeds wish scores into scheduler.build_schedule().
-4.  Prints a conflict-free schedule.
+chatbot.py  –  CS-major aware
+─────────────────────────────
+1. Loads quarter sections from ucr_courses_data.json
+2. Loads CS major plan (required, tech-elective, breadth pools)
+3. Builds a schedule in two phases:
+      a) core plan courses
+      b) if slots remain, pulls tech electives / breadth courses
 """
 
-import csv, json, pathlib, sys
-from prompt_toolkit import prompt
+import json, pathlib, sys, textwrap
+from typing import List, Dict, Any, Set
 
 from scheduler import build_schedule
-from courseRanking import rank_courses  # <- you implemented this refactor!
+from courseRanking import rank_courses   # needs rank_courses() refactor
 
-# ── config ────────────────────────────────────────────────────────────
-TERM          = "202440"
-CSV_PATH      = pathlib.Path(f"ucr_courses_{TERM}.csv")
-MAJOR_PLAN    = pathlib.Path("majors/computer_science.json")
+# ── file locations ───────────────────────────────────────────────────
+COURSE_JSON = pathlib.Path("ucr_courses_data.json")
+PLAN_FILE   = pathlib.Path("cs_course_plan.json")
 
-if not CSV_PATH.exists():
-    sys.exit(f"❌ Banner CSV not found: {CSV_PATH}")
-if not MAJOR_PLAN.exists():
-    sys.exit(f"❌ Major plan not found: {MAJOR_PLAN}")
+if not COURSE_JSON.exists():
+    sys.exit(f"❌ Course file not found: {COURSE_JSON}")
+if not PLAN_FILE.exists():
+    sys.exit(f"❌ Plan file not found: {PLAN_FILE}")
 
-sections = list(csv.DictReader(open(CSV_PATH)))
-major_plan = json.load(open(MAJOR_PLAN))["plan_by_quarter"]
-major_flat = [c for quarter in major_plan for c in quarter]
+sections: List[Dict[str, Any]] = json.load(open(COURSE_JSON))
+plan             = json.load(open(PLAN_FILE))
+plan_courses     = {c.strip().upper() for q in plan["plan_by_quarter"] for c in q}
+tech_electives   = {c.strip().upper() for c in plan.get("tech_elective_pool", [])}
+breadth_pool     = {c.strip().upper() for c in plan.get("engr_breadth_pool", [])}
 
-print("🤖  Welcome to UCR schedule bot!")
-completed = {
-    c.strip().upper()
-    for c in prompt("Enter completed courses (comma-sep): ").split(",")
-    if c.strip()
+print("🤖  Welcome to UCR Schedule Bot (CS major)")
+completed: Set[str] = {
+    c.strip().upper() for c in input("Enter completed courses (comma-sep): ").split(",") if c.strip()
 }
+desired_load = int(input("How many courses this quarter? "))
+pref_query   = input("Any day/time/topic preferences (optional): ")
 
-desired_load = int(prompt("How many courses do you want this quarter? "))
+# ─── Phase 1: required plan courses ──────────────────────────────────
+core_needed = [c for c in plan_courses if c not in completed]
 
-preference_query = prompt(
-    "Tell me anything about preferred days/times/topics (or leave blank): "
-)
-
-# candidate list = still-needed major courses + any elective codes you know
-courses_to_take = [c for c in major_flat if c not in completed]
-
-# ── partner's ranking algorithm ──────────────────────────────────────
-ranked_docs = rank_courses(
+ranked_core = rank_courses(
     courses_taken=list(completed),
-    preference_query=preference_query,
-    courses_to_take=courses_to_take,
-    top_k=100,
+    preference_query=pref_query,
+    courses_to_take=core_needed,
+    top_k=200
 )
+wish_scores = {d["course_id"]: d["score"] for d in ranked_core}
 
-wish_scores = {d["course_id"]: d["score"] for d in ranked_docs}
+schedule = build_schedule(sections, wish_scores, completed, desired_load)
 
-if not wish_scores:
-    sys.exit("❌ No ranked courses returned. Check ranking logic / DB.")
+# ─── Phase 2: fill with electives / breadth if still short ───────────
+if len(schedule) < desired_load:
+    remaining_slots = desired_load - len(schedule)
 
-schedule = build_schedule(
-    sections=sections,
-    wish_scores=wish_scores,
-    completed=completed,
-    max_load=desired_load,
-)
+    already_chosen = {s["subjectCourse"] for s in schedule}
+    extra_pool = (tech_electives | breadth_pool) - completed - already_chosen
 
+    if extra_pool:
+        print(f"⚠️  Only {len(schedule)} core courses fit. "
+              f"Pulling electives/breadth for {remaining_slots} more slot(s).")
+
+        # Enhance preference query so LLM understands why extras are needed
+        pref_query_extras = (pref_query + " If core courses are unavailable, "
+                             "recommend technical electives or breadth courses "
+                             "for the remaining slots.").strip()
+
+        ranked_extra = rank_courses(
+            courses_taken=list(completed),
+            preference_query=pref_query_extras,
+            courses_to_take=list(extra_pool),
+            top_k=200
+        )
+
+        # Merge new scores, keep existing ones higher priority if duplicated
+        for d in ranked_extra:
+            wish_scores.setdefault(d["course_id"], d["score"])
+
+        schedule = build_schedule(sections, wish_scores, completed, desired_load)
+
+# ─── present result ──────────────────────────────────────────────────
 print("\n🗓️  Final schedule")
 if not schedule:
-    sys.exit("Could not build a valid schedule with given preferences.")
+    sys.exit("Could not build a valid schedule with given constraints.")
+
+def day_flags_to_str(sec: Dict[str, Any]) -> str:
+    return "".join(
+        l for l, flag in zip(
+            "MTWRF",
+            [sec["meeting_meetingMonday"],
+             sec["meeting_meetingTuesday"],
+             sec["meeting_meetingWednesday"],
+             sec["meeting_meetingThursday"],
+             sec["meeting_meetingFriday"]]
+        ) if flag
+    ) or "TBA"
 
 for s in schedule:
-    mt = s["meetingTimes"][0]
-    days = mt.get("meetingDays", "")
-    print(f"{s['subjectCourse']:7} {s['courseTitle'][:40]:40} "
-          f"{days:5} {mt.get('beginTime','----')}-{mt.get('endTime','----')}")
+    days  = day_flags_to_str(s)
+    begin = s.get("meeting_meetingBeginTime", "----")
+    end   = s.get("meeting_meetingEndTime", "----")
+    print(f"{s['subjectCourse']:7} {s['courseTitle'][:38]:38} {days:5} {begin}-{end}")

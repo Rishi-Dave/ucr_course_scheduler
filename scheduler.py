@@ -1,28 +1,53 @@
 """
 scheduler.py
 ────────────
-Pure–logic engine: pick a conflict-free, prerequisite-valid schedule that
-maximises a “wish score” (supplied by courseRanking.rank_courses).
+Pure scheduling engine for UCR course data stored in ucr_courses_data.json.
+• Works with docs that look like:
 
-No I/O except loading data if you run this file directly.
+    {
+      "subjectCourse": "CS141",
+      "creditHours": 4.0,
+      "meeting_meetingBeginTime": "1830",
+      "meeting_meetingTypeDescription": "Lecture",
+      ...
+    }
+
+• Picks a conflict-free, prerequisite-valid set of sections that maximises
+  a “wish score” supplied by courseRanking.rank_courses().
+
+NEW in this version
+───────────────────
+1. **Skips non-lecture sections** (so discussion / lab CRNs aren’t treated
+   as separate courses).
+2. **Never chooses more than one CRN for the same subjectCourse** —
+   prevents duplicate lectures of the same class.
 """
 
 from __future__ import annotations
-import csv, json, re
-from pathlib import Path
-from typing import Dict, List, Any, Set
+import json, re
+from typing import List, Dict, Any, Set
 
 
-# ──── helpers ──────────────────────────────────────────────────────────
+# ─── helpers ──────────────────────────────────────────────────────────
 def _parse_minutes(t: str | None) -> int | None:
-    """'1330' → 810. Returns None if blank/invalid."""
-    if t and len(t) >= 4 and t.isdigit():
-        return int(t[:2]) * 60 + int(t[2:])
-    return None
+    """'1330' → 810 minutes. None if blank/invalid."""
+    return int(t[:2]) * 60 + int(t[2:]) if t and t.isdigit() and len(t) >= 4 else None
+
+
+def _days_str(sec: dict) -> str:
+    """Convert boolean day flags → e.g. 'MWF' or 'TR'."""
+    flags = [
+        ("M", sec.get("meeting_meetingMonday")),
+        ("T", sec.get("meeting_meetingTuesday")),
+        ("W", sec.get("meeting_meetingWednesday")),
+        ("R", sec.get("meeting_meetingThursday")),
+        ("F", sec.get("meeting_meetingFriday")),
+    ]
+    return "".join(letter for letter, flag in flags if flag) or ""
 
 
 def _overlap(a: dict, b: dict) -> bool:
-    """Detect meeting-time clash between two section dicts."""
+    """Detect day & time clash between two sections."""
     if not a["days"] or not b["days"]:
         return False
     if not set(a["days"]) & set(b["days"]):
@@ -30,29 +55,21 @@ def _overlap(a: dict, b: dict) -> bool:
     return a["start"] < b["end"] and b["start"] < a["end"]
 
 
-# very light Boolean evaluator for strings like
-#  'CS010C AND CS111 AND MATH009C OR MATH09HC'
-def _prereq_met(expr: str, completed: Set[str]) -> bool:
-    if not expr:
+def _prereq_met(prereq_matrix: list[list[str]], completed: Set[str]) -> bool:
+    """
+    Banner prereqs are list-of-OR lists:
+        [['CS010C'], ['CS111'], ['MATH009C', 'MATH09H']]
+    True iff each inner list has at least ONE item in `completed`.
+    """
+    if not prereq_matrix:
         return True
-
-    tokens = expr.split()
-    need_and = []
-    cur_and_group = []
-
-    for tok in tokens + ["OR"]:         # sentinel
-        if tok == "AND":
-            continue
-        if tok == "OR":
-            if cur_and_group:
-                need_and.append(all(c in completed for c in cur_and_group))
-            cur_and_group = []
-        else:
-            cur_and_group.append(tok)
-    return any(need_and)
+    for or_block in prereq_matrix:
+        if not any(c in completed for c in or_block if c != "nan"):
+            return False
+    return True
 
 
-# ──── main algorithm ───────────────────────────────────────────────────
+# ─── core scheduler ───────────────────────────────────────────────────
 def build_schedule(
     sections: List[Dict[str, Any]],
     wish_scores: Dict[str, float],
@@ -66,44 +83,47 @@ def build_schedule(
     total wish_score, no clashes, prereqs satisfied, units in range.
     """
 
-    # ── pre-process ────────────────────────────────────────────────────
     clean: List[dict] = []
     for raw in sections:
-        code = raw["subjectCourse"]
-        if code not in wish_scores or code in completed:
-            continue                     # not desired or already finished
+        # 1️⃣  Skip non-lecture meeting types early
+        if (raw.get("meeting_meetingTypeDescription") or "").lower() != "lecture":
+            continue
 
-        mt = (raw.get("meetingTimes") or [{}])[0]
+        code = raw["subjectCourse"].strip().upper()
+        if code not in wish_scores or code in completed:
+            continue
+
         sec = {
             "raw":   raw,
             "code":  code,
             "score": wish_scores[code],
-            "units": int(raw.get("creditHourLow", 4)),
-            "days":  mt.get("meetingDays", ""),
-            "start": _parse_minutes(mt.get("beginTime")),
-            "end":   _parse_minutes(mt.get("endTime")),
-            "prereq": raw["prerequisites"],
+            "units": int(raw.get("creditHours", 4)),
+            "days":  _days_str(raw),
+            "start": _parse_minutes(raw.get("meeting_meetingBeginTime")),
+            "end":   _parse_minutes(raw.get("meeting_meetingEndTime")),
+            "prereq": raw.get("prerequisites", []),
         }
         clean.append(sec)
 
     clean.sort(key=lambda s: s["score"], reverse=True)
 
-    # ── DFS branch-and-bound search ───────────────────────────────────
     best_sched: list[dict] = []
     best_score = -1
 
     def dfs(idx: int, chosen: list[dict], units: int, score: float):
         nonlocal best_sched, best_score
-        # update best
         if len(chosen) <= max_load and min_units <= units <= max_units and score > best_score:
             best_sched = chosen[:]
             best_score = score
-        # prune
         if idx == len(clean) or len(chosen) == max_load:
             return
 
         for i in range(idx, len(clean)):
             cand = clean[i]
+
+            # 2️⃣  Skip if this course already selected (avoid duplicates)
+            if any(s["code"] == cand["code"] for s in chosen):
+                continue
             if units + cand["units"] > max_units:
                 continue
             if not _prereq_met(cand["prereq"], completed):
@@ -116,33 +136,30 @@ def build_schedule(
             chosen.pop()
 
     dfs(0, [], 0, 0)
-    return [s["raw"] for s in best_sched]   # return original Banner dicts
+    return [s["raw"] for s in best_sched]
 
 
-# ──── optional CLI runner (handy for smoke tests) ─────────────────────
+# ─── optional CLI smoke test ──────────────────────────────────────────
 if __name__ == "__main__":
-    import argparse, sys, textwrap
-
-    p = argparse.ArgumentParser(
-        description="Pick best schedule given wish-scores JSON."
-    )
-    p.add_argument("--csv",  required=True, help="Banner CSV, e.g. ucr_courses_202440.csv")
-    p.add_argument("--scores", required=True, help="JSON file {course: score}")
-    p.add_argument("--completed", default="", help="CSV list of courses already taken")
+    import argparse, sys
+    p = argparse.ArgumentParser(description="Quick test scheduler.")
+    p.add_argument("--json", required=True, help="ucr_courses_data.json")
+    p.add_argument("--scores", required=True, help="JSON map {course: score}")
+    p.add_argument("--completed", default="", help="CSV list of completed courses")
     p.add_argument("--load", type=int, default=4)
     args = p.parse_args()
 
-    sections = list(csv.DictReader(open(args.csv)))
+    sections = json.load(open(args.json))
     wish_scores = json.load(open(args.scores))
     completed = {c.strip().upper() for c in args.completed.split(",") if c.strip()}
 
     sched = build_schedule(sections, wish_scores, completed, max_load=args.load)
 
-    print("\nChosen schedule")
     if not sched:
         sys.exit("❌ No feasible schedule.")
+    print("\nChosen schedule")
     for s in sched:
-        mt = s["meetingTimes"][0]
-        days = mt.get("meetingDays", "")
+        days = _days_str(s)
         print(f"{s['subjectCourse']:7} {s['courseTitle'][:40]:40} "
-              f"{days:5} {mt.get('beginTime','----')}-{mt.get('endTime','----')}")
+              f"{days or 'TBA':5} {s.get('meeting_meetingBeginTime','----')}-"
+              f"{s.get('meeting_meetingEndTime','----')}")

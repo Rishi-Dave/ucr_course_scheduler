@@ -1,0 +1,26 @@
+{
+    "plan_by_quarter": [
+        ["CS010A ", "ENGL001A", "ENGR001I", "MATH009A"],
+        ["CS010B", "ENGL001B", "MATH 009B", "CS 011"],
+        ["CS 010C", "MATH 009C"],
+        ["MATH031", "CS100", "PHYS040A", "MATH010A"],
+        ["CS061", "CS111", "PHYS040B"],
+        ["STAT155", "PHYS040C", "EECS120A"],
+
+        ["CS141", "CS150", "BIOL002"],
+        ["CS161", "CS152", "ENGR101I"],
+        ["CS153", "ENGR180W"]
+    ],
+    "tech_elective_pool": [
+        "CS105","CS108","CS110","CS120B","CS122A","CS130","CS131","CS142",
+        "CS160","CS161L","CS162","CS163","CS164","CS165","CS166","CS167", 
+        "CS168", "CS169", "CS170","CS171","CS172","CS173",
+        "CS175","CS177","CS180","CS181","CS182","CS183","CS198",
+        "MATH120","MATH126","MATH135A","MATH135B","PHIL124", "CS178A", "CS178B", 
+        "CS179F", "CS179G", "CS179I", "CS179H", "CS179M", "CS179N"
+    ],
+    "engr_breadth_pool": [
+        "BIEN010","EE030A","EE016","EE020A","ME009","ME010",
+        "CHEM001A","CHEM001B","STAT004","STAT008","STAT010"
+    ]
+}
