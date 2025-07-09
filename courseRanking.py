@@ -16,7 +16,9 @@ deployment= "gpt-4o"
 embeddingsdeployment = "text-embedding-3-small"
 password = os.environ["mongodb_pass"]
 
-MONGO_URI = f"mongodb+srv://rdave009:{password}@cluster0.srsdcbr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+
+MONGO_URI = f"mongodb+srv://snallapa1:{password}@cluster0.srsdcbr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+
 DATABASE_NAME = "course_catalog"  # You can use the same database as your main course data
 EMBEDDINGS_COLLECTION_NAME = "course_vectors"
 COURSES_COLLECTION_NAME = "courses"
@@ -94,7 +96,8 @@ def prereqs_fullfilled(client, coursesTaken, coursesToTake):
                     print(f"{course} prerequisites are not fullfilled")
                     validCourse = False
                     break
-            if(validCourse):
+            if(validCourse):  
+                print(f"{course} is valid")
                 validCourses.append(course)
     return validCourses 
 
@@ -102,7 +105,7 @@ def prereqs_fullfilled(client, coursesTaken, coursesToTake):
 def score_embeddings(mongo_client, query, validCourses):
     if query:
         query_embedding = client.embeddings.create(
-            input=[general_interest_query],
+            input=[query],
             model="text-embedding-3-small"
         ).data[0].embedding
 
@@ -222,4 +225,35 @@ if __name__ == "__main__":
     else:
         print("Could not connect to MongoDB. Embeddings not uploaded.")
     
+
     #scoring: keyword vector semantic search,' during valid time frame, 
+
+def rank_courses(courses_taken: list[str],
+                 preference_query: str,
+                 courses_to_take: list[str],
+                 top_k: int = 50) -> list[dict]:
+    mongo = connect_to_mongodb(MONGO_URI)
+    if not mongo:
+        print("Running in offline Mongo mode")
+        return [{"course_id": c, "score": 5, "course": {}} for c in courses_to_take]
+
+    valid = prereqs_fullfilled(mongo, courses_taken, courses_to_take)
+    if not valid:
+        mongo.close()
+        return []
+
+    hits = score_embeddings(mongo, preference_query, valid)[:top_k]
+
+    ranked = []
+    for hit in hits:
+        for sec in mongo[DATABASE_NAME][COURSES_COLLECTION_NAME].find(
+                {"subjectCourse": hit["course_id"],
+                 "meeting_meetingTypeDescription": "Lecture"}):
+            score = get_llm_score(sec, preference_query, hit["score"])
+            ranked.append({"course_id": hit["course_id"],
+                           "score": int(score) if score else 5,
+                           "course": sec})
+
+    mongo.close()
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    return ranked
