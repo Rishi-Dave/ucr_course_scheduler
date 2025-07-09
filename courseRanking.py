@@ -16,7 +16,9 @@ deployment= "gpt-4o"
 embeddingsdeployment = "text-embedding-3-small"
 password = os.environ["mongodb_pass"]
 
+
 MONGO_URI = f"mongodb+srv://snallapa1:{password}@cluster0.srsdcbr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+
 DATABASE_NAME = "course_catalog"  # You can use the same database as your main course data
 EMBEDDINGS_COLLECTION_NAME = "course_vectors"
 COURSES_COLLECTION_NAME = "courses"
@@ -94,7 +96,7 @@ def prereqs_fullfilled(client, coursesTaken, coursesToTake):
                     print(f"{course} prerequisites are not fullfilled")
                     validCourse = False
                     break
-            if(validCourse):
+            if(validCourse):  
                 print(f"{course} is valid")
                 validCourses.append(course)
     return validCourses 
@@ -223,6 +225,7 @@ if __name__ == "__main__":
     else:
         print("Could not connect to MongoDB. Embeddings not uploaded.")
     
+
     #scoring: keyword vector semantic search,' during valid time frame, 
 
 def rank_courses(courses_taken: list[str],
